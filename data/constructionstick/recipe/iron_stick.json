@@ -5,8 +5,8 @@
     "X": "#c:ingots/iron"
   },
   "pattern": [
-    "  X",
-    " # ",
+    "  #",
+    " X ",
     "#  "
   ],
   "result": {

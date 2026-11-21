@@ -5,8 +5,8 @@
     "X": "#c:ingots/netherite"
   },
   "pattern": [
-    "  X",
-    " # ",
+    "  #",
+    " X ",
     "#  "
   ],
   "result": {

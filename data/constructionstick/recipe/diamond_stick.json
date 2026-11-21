@@ -5,8 +5,8 @@
     "X": "#c:gems/diamond"
   },
   "pattern": [
-    "  X",
-    " # ",
+    "  #",
+    " X ",
     "#  "
   ],
   "result": {

@@ -3,10 +3,16 @@
 Ported from **Construction Sticks 1.5.0** (`Mrbysco/ConstructionSticks`, MIT) for
 Minecraft Java 1.21.1 NeoForge. Local-only port.
 
-Status: `ported-partial` — **slice 1 (construction)** implemented: five sticks,
-plane fill of the clicked face, support matching, tier limit and item
-consumption, worn stick. Angel/destruction/replacement modes, upgrades, the
-options screen/undo and the battery are later slices.
+Status: `ported-partial` — **slices 1–2** implemented: five sticks, plane fill of
+the clicked face, support matching, tier limit and item consumption; and the
+sticks' tier durability and stack size (the wear trips, breaks on the last use,
+creative pays nothing), with all ten carried recipes proven in a crafting table.
+Angel/destruction/replacement modes, upgrades, the options screen/undo and the
+battery are later slices.
+
+> **0.2.5 (2026-11-21): slice 2 — durable sticks.** The latest section,
+> [`## Slice 2`](#slice-2--durable-sticks-and-the-ten-carried-recipes-proven-025-2026-11-21),
+> is the current record; everything below it is history.
 
 > **0.2.0 (2026-11-18):** the package moved from the retired `.hnmod` container to
 > the flat SDK `.hmod` (`api = "0.2"`, one `impl mod_api::Hooks`, content at the
@@ -102,7 +108,31 @@ the options screen/undo, container-sourced supply and the vanilla
 `placed_block` trigger. Row 1 of `REPIN-AUDIT.md` is done; rows 3-11 and 13-14
 remain later slices.
 
-### Verification (pin `83ad384f48d0742746d518737511882680aab5b7`, mixins `e8cd0aa`)
+### Review fixes (2026-11-18) — registry review #1217
+
+| Finding | Fix | Test / proof |
+|---|---|---|
+| `src/support.rs:207` — `player_place_block` checks loaded and absolute world bounds but not the configured border or the game's use permission, so a fill begun on an allowed block could write across a protected boundary | every planned cell now passes `may_write`: the level's `world_border` and the game's own `mayUseItemAt` for the held stick (build permission, adventure's `can_place_on`), and a refused cell is skipped exactly as a refused placement was | `support::tests::a_cell_outside_the_world_border_is_not_written` and `a_click_normal_names_the_face_the_game_checks`; the e2e runs a fill across a set border |
+
+**API gap (recorded, not faked):** spawn protection is not exposed to mods at this pin —
+`surface.json` has no `spawn_protection` symbol and the engine's check lives only in its own
+break/placement paths (`horizon-client/src/game/modding/native_player_break.rs`), so the port
+cannot ask it. The closest supported API (`mayUseItemAt`) and the border are enforced;
+spawn protection remains an upstream gap for the whole direct-placement surface.
+
+**Found while proving the leg:** the package carried 24 `constructionstick:smithing_upgrade`
+recipes whose custom serializer 26.3 does not register — the game **crashed** at load. The
+upgrade modes are not ported, so the family was removed (a port defect, recorded here, not a
+balance change). The e2e's border phase sits before its quit/cleanup and uses a 5-wide wall so
+the border cuts the plane; the control leg is opt-in (`CONTROL=1`). **Ladder:** 15 tests, clippy
+`-D warnings` 0, `fmt --check` clean, two builds byte-identical, `check` and `fits` exit 0;
+`launcher-game.sh run constructionstick` → `PASS` + `EXIT:0` (border: 3 placed, 0 outside),
+`GAME=$CONTROL_GAME` → `EXIT:1` (`../_shared/evidence/constructionstick-e2e/`).
+
+Package 0.2.1: **92,424 B**, SHA-256 `c26a23f8d2883533e7e7ad17cf115df05960d484b91a8ee1d209997bd593e175`;
+a second build is byte-identical (`cmp`), `check` and `fits` exit 0.
+
+## Verification (pin `83ad384f48d0742746d518737511882680aab5b7`, mixins `e8cd0aa`)
 
 | Check | Evidence | Result |
 |---|---|---|
@@ -656,3 +686,227 @@ Construction Sticks:
 > The in-game check has **not** been re-run (no `horizon-launcher` here); see
 > "Not re-run in this migration". Licence: MIT, with the original notice inside the
 > package.
+
+## Slice 2 — durable sticks, and the ten carried recipes proven (0.2.5, 2026-11-21)
+
+**Class + tier** (ledger): class **content**, tier **logic** — carried item data plus the
+existing `use_on` behaviour, no new mechanic. Licence **MIT** (rank 0, from the jar's
+`neoforge.mods.toml`). Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** +
+mixins **`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`** (the package was still on `0b14f8a`;
+this slice repins it). The brief's "fits its tier (deep)" contradicts its own Context line
+and `AGENTS.md`/the ledger, which say **logic**; the ledger governed and the slice fits
+inside it.
+
+### The gap it closes (from `### Gaps (0.2.0)`)
+
+> **Durability is written but never trips**: the content's items are
+> `{"template": "minecraft:stick"}`, so `max_damage` is 0 and nothing wears (`worn` is
+> unit-tested for the day the data declares a durability).
+
+and from `## Upstream source`:
+
+> Five sticks, `max_stack_size` 1, durability = the vanilla tier's uses
+> (59/131/250/1561/2031) and placement limits **3/9/27/128/1024**
+
+So the mod's whole cost system was inert: every stick stacked to 64 and placed forever.
+This is also the only remaining gap that is *not* blocked by a missing pin API (entity
+obstruction, `canSurvive`, `getStateForPlacement`, spawn protection, battery/energy and the
+key/menu APIs are recorded elsewhere); the option set, the modes and the upgrades need the
+options screen and the upgrade components, a separate slice.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `data/constructionstick/horizon/item/<stick>.json` (×5) | `max_stack_size: 1` and `components: {"minecraft:max_damage": 59/131/250/1561/2031}` |
+| `src/runtime.rs` | `remaining_durability(max_damage, damage)` and `use_limit(action_limit, creative, remaining, supply)` — pure, 2 new tests |
+| `src/support.rs` | the use reads its budget from both; creative pays no durability (`StickJob.doIt`, `:88-111`) while it is still capped by the remaining durability (`StickJob.java:71`); 1 new test reads the five packaged declarations |
+| `tools/craft_recipes.py` (new) | crafts all ten carried recipes in a real table and asserts result id + count, ingredient consumption and an empty grid |
+| `tools/e2e.sh` | `--offscreen`, six phases, `SELFTEST=wear` and `SELFTEST=recipe`; the world-border restore is now asserted |
+
+### Red proof (before the fix)
+
+Unit, the carried data (`sdk-test-red-data.log`):
+
+```text
+thread 'support::tests::every_stick_declares_its_tier_durability_and_does_not_stack' panicked at src/support.rs:457:13:
+assertion `left == right` failed: constructionstick:wooden_stick: upstream's sticks are one per stack
+  left: None
+ right: Some(1)
+```
+
+Unit, the budget helpers (`sdk-test-red-limit.log`):
+
+```text
+error[E0425]: cannot find function `remaining_durability` in this scope
+   --> src/runtime.rs:349:20
+```
+
+In game, the recipes (`../_shared/evidence/constructionstick-e2e/e2e-launcher-red-recipe-collision.log`):
+
+```text
+  copper_stick: {"count": 1, "durability_left": 190, "item": "minecraft:copper_spear", "max_damage": 190, "slot": 200}
+FAIL: copper_stick: expected 1 constructionstick:copper_stick, got {'count': 1, 'durability_left': 190, 'item': 'minecraft:copper_spear', 'max_damage': 190, 'slot': 200}
+```
+
+That third line is the 26.3 collision below; the parity rule is what surfaced it.
+
+### Upstream defects fixed (target-version collision)
+
+**The jar's four metal-stick recipes are 26.3's spear recipes.** The jar's pattern is
+`"  X"` / `" # "` / `"#  "` with `#` = `#c:rods/wooden` (a stick) and `X` the metal tag;
+26.3 ships `data/minecraft/recipe/copper_spear.json` (and iron/diamond/netherite/gold/
+wooden) with **the same three occupied cells and `#` = `minecraft:stick`**. The game chose
+vanilla's recipe for the identical grid, so the port's copper/iron/diamond/netherite
+sticks were uncraftable — and, because the winner is recipe-order dependent, ambiguous.
+
+- **Fix, minimal:** the four metal patterns move the tip to the centre and the two sticks
+  to the corners — `"  #"` / `" X "` / `"#  "`. Same ingredients (2 sticks + 1 ingot), same
+  result, no vanilla recipe matches any cell. The wooden stick (3 sticks) never collided
+  and is unchanged.
+- **A user notices:** the recipe book shows the tip in the centre instead of the corner;
+  the cost is unchanged.
+- **Proof:** phase 5 crafts all ten recipes and asserts the result id and that the
+  ingredients are consumed; `SELFTEST=recipe` flips the first expectation and fails.
+
+This is a *target-version* defect (the jar is correct for 1.21.1), recorded under the
+defect rule because the port must not ship a recipe that cannot make its own item.
+
+### Ladder (pin `0a875da`, every compile in a `build-slot.sh` lease, `CARGO_INCREMENTAL=0`)
+
+| Step | Command | Result | Log |
+|---|---|---|---|
+| tests | `cargo test --offline` | **18 passed**, 0 failed (10 `runtime::`, 8 `support::`) | `sdk-test.log` |
+| lints | `cargo clippy --all-targets --offline -- -D warnings` | exit 0, 0 warnings | `sdk-clippy.log` |
+| format | `cargo fmt --check` | `FMT-OK` | `sdk-clippy.log` |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | `SDK 0a875da … in ./.horizon/sdk` / `Built ./target/horizon-mod/constructionstick.hmod` | `sdk-build.log` |
+| second build | the same, from a deleted `target/horizon-mod` | `cmp: identical` | `sdk-build-second.log` |
+| registry check | `cargo horizon-mod check constructionstick.hmod` | exit **0** | `sdk-check.log` |
+| fits, own pin | `… fits constructionstick.hmod --build 0a875da` | `0a875da  made for` | `sdk-fits.log` |
+| fits, **different build** | `… fits constructionstick.hmod --build 0b14f8a` | `0b14f8a  fits` | `sdk-fits-other.log` |
+| package gate | `python3 ports/tools/verify-sdk-package.py constructionstick` | **1/1** | `sdk-package-gate.log` |
+
+Artifact: `constructionstick.hmod`, **94,435 B**, SHA-256
+`73c1fd3e91f0bb0b2ecaa9c34650480dfda8c3cbb71d6bd4ccd54294076e4938`, **140 entries**
+(51 `assets/`, 80 `data/`, manifest, Cargo.toml, 3 `src/`, `uses.json`, 3 notices/readme),
+**no `Cargo.lock`**; `uses.json` 136 entries, `made_for = 0a875da…`.
+
+### In game (2026-11-21, pin `0a875da`)
+
+Launcher-built game (`HORIZON_E2E_INSTANCE=constructionstick-e2e`):
+`native-0a875da-0e022bce4150`, with `Compiling constructionstick (1 of 1)` in the build log
+(the manifest version was bumped so the launcher could not reuse the previous build). The
+control is the same Nightly unmodified. Seven `e2e*.log` legs, all green under
+`check-e2e-logs.py constructionstick-e2e --strict` (7/7):
+
+| Leg | Log | Result |
+|---|---|---|
+| default (six phases) | `e2e-launcher.log` | `PASS:` + `EXIT:0` |
+| counterfactual (plain `minecraft:stick`) | `e2e-launcher-counterfactual.log` | `PASS` + `EXIT:0`, 0 placed |
+| selftest, phase 1 flipped | `e2e-launcher-selftest.log` | `FAIL` + `EXIT:1` |
+| selftest, durability flipped | `e2e-launcher-selftest-wear.log` | `FAIL` + `EXIT:1` |
+| selftest, recipe flipped | `e2e-launcher-selftest-recipe.log` | `FAIL` + `EXIT:1` |
+| control (same Nightly, no package) | `e2e-launcher-control.log` | `FAIL` + `EXIT:1` |
+| red: the 26.3 spear collision (0.2.3) | `e2e-launcher-red-recipe-collision.log` | `FAIL` + `EXIT:1` |
+
+The slice's own `ctl` lines, verbatim from `e2e-launcher.log` (the tick replies elided):
+
+```text
+  border restored: The world border is currently 59999968 block(s) wide
+== phase 5: the ten carried recipes craft in a real crafting table ==
+  wooden_stick: {"count": 1, "item": "constructionstick:wooden_stick", "slot": 200}
+    crafted 1 constructionstick:wooden_stick, ingredients left {'minecraft:stick': 0}, grid []
+  copper_stick: {"count": 1, "item": "constructionstick:copper_stick", "slot": 200}
+    crafted 1 constructionstick:copper_stick, ingredients left {'minecraft:stick': 0, 'minecraft:copper_ingot': 0}, grid []
+  iron_stick: {"count": 1, "item": "constructionstick:iron_stick", "slot": 200}
+  diamond_stick: {"count": 1, "item": "constructionstick:diamond_stick", "slot": 200}
+  netherite_stick: {"count": 1, "item": "constructionstick:netherite_stick", "slot": 200}
+  template_angel: {"count": 1, "item": "constructionstick:template_angel", "slot": 200}
+  template_battery: {"count": 1, "item": "constructionstick:template_battery", "slot": 200}
+  template_destruction: {"count": 1, "item": "constructionstick:template_destruction", "slot": 200}
+  template_replacement: {"count": 1, "item": "constructionstick:template_replacement", "slot": 200}
+  template_unbreakable: {"count": 1, "item": "constructionstick:template_unbreakable", "slot": 200}
+  all ten carried recipes crafted, each with its ingredients consumed
+== phase 6: durable sticks: one per stack, one damage per block, breaks at 59 ==
+== phase 6a: two given sticks are two stacks of one ==
+  two given sticks: [{"count":1,"item":"constructionstick:wooden_stick","slot":0},{"count":1,"item":"constructionstick:wooden_stick","slot":1}]
+== phase 6b: three placed blocks cost three durability ==
+Player has the following entity data: {components: {"minecraft:damage": 3}, count: 1, id: "constructionstick:wooden_stick"}
+  damage after three blocks: 3
+== phase 6c: a stick at damage 58 places one block and breaks ==
+Player has the following entity data: {components: {"minecraft:damage": 58}, count: 1, id: "constructionstick:wooden_stick"}
+  nearly spent stick: placed 1, sticks left 0
+PASS: … all ten carried recipes crafted with their ingredients consumed; the stick is one per stack, carried damage 3 after three blocks and broke on its 59th use after one more
+EXIT:0
+```
+
+The selftest legs, verbatim (the proof each assertion can fail):
+
+```text
+FAIL: the stick carries damage 3 after three placed blocks, expected 4
+EXIT:1
+```
+
+```text
+FAIL: wooden_stick: expected 1 constructionstick:copper_stick, got {'count': 1, 'item': 'constructionstick:wooden_stick', 'slot': 200}
+```
+
+### Deviations (deliberate)
+
+1. **Creative wears nothing** (upstream: place → creative done), and a creative use is
+   still capped by the remaining durability (upstream's quirk, `StickJob.java:71`). Slice 1
+   wrote damage in creative too, which would have broken sticks once `max_damage` was real.
+2. **The four metal-stick recipes moved the tip to the centre** (the 26.3 collision above).
+3. **No Unbreaking**: the carried items declare no `enchantable` component, so an Unbreaking
+   level is unreachable; the wear is a damage write, not `damage_held`.
+
+### Harness facts this slice measured
+
+1. **`worldborder set 60000000` is refused and leaves the old border in place**; the leg's
+   restore was a no-op and the 4-wide border then refused the phase-5 table at x=2.5
+   ("the table never opened"). `59999968` is accepted; the leg now asserts `worldborder get`.
+2. **A crafting-table screen is `screen: "inventory"`** with `craft_size: 3` and slots
+   100..108 + result 200; it needs `--offscreen` (a headless client never opens it).
+3. **`item replace entity @s hotbar.0 …` overwrites the stack in that slot** — after
+   `rebuild_wall` gave 64 stone there, it erased the supply and the fill refused for want
+   of supply, not durability. The stick is placed before the supply now.
+4. **An unstackable ingredient arrives as several stacks of one**, so a single pick-up
+   cannot fill two cells (the destruction template's two diamond pickaxes); the crafting
+   helper fills one target per pick-up.
+5. **`data get entity @s SelectedItem`** is the readable damage path: the chat line is
+   `… {components: {"minecraft:damage": 3}, count: 1, id: "constructionstick:wooden_stick"}`.
+
+### Coverage (slice 2, against the jar)
+
+| family (in the jar) | status |
+|---|---|
+| plane fill of the clicked face, five tiers, limit + consumption | **tested** — phases 1, 4, counterfactual (unchanged) |
+| clicked state copied (a stair keeps `facing=north`) | **tested** — phase 2 (unchanged) |
+| replaceable cells filled (`replace` default on) | **tested** — phase 3 (unchanged) |
+| world border / `mayUseItemAt` on every planned cell | **tested** — phase 4 (unchanged) |
+| **the five base stick recipes** | **tested** — phase 5 crafts each, asserts the id and that the ingredients are consumed |
+| **the five upgrade-template recipes** | **tested** — phase 5 crafts each and asserts the result id (the templates' behaviour is not ported) |
+| **tier durability, one per stack, wear and break** | **tested** — phase 6a/6b/6c; `SELFTEST=wear` flips 6b |
+| creative pays no item and no durability | **unit-tested** (`use_limit`) + the creative path is unchanged; no e2e leg (the leg is survival) |
+| angel / destruction / replacement modes | `not ported` — needs the option components and their actions (later slice) |
+| battery upgrade | `blocked(no-energy-on-item-use)` — no item energy buffer write during `use_on` at this pin |
+| options screen, keybinds, undo | `not ported` — client UI (tier `client`), and the pin has no server-side key action |
+| container-sourced supply | `not ported` — the supply is the main inventory (upstream's first pool) |
+| `canSurvive` / entity obstruction / `getStateForPlacement` / spawn protection | `blocked(<gap>)` — see the 0.2.0 gap list |
+| place sound, `placed_block` trigger, statistic | `blocked(no-place-event)` — `player_place_block`'s documented limits |
+| `#non_placable` / block-entity blacklist | `not ported` — needs a block-entity query the port does not use yet |
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
+
+### Changelog (0.2.5)
+
+> **Construction Sticks 0.2.5 — durable sticks.** Slice 2 carries the jar's tier
+> durability (59/131/250/1561/2031) and `max_stack_size: 1` on the five sticks, so a placed
+> block now costs one item **and** one durability, a stick breaks on its last use, and
+> creative places for free without wearing (it is still capped by the remaining durability,
+> as upstream). The four metal-stick recipes move their tip to the centre: the jar's
+> diagonal is 26.3's spear pattern and vanilla's recipe won the identical grid. All ten
+> carried recipes are now proven in a real crafting table (result id + count, ingredients
+> consumed). Repinned to Horizon `0a875da` / mixins `e59da90`; `fits` prints `made for` at
+> the pin and `fits` at `0b14f8a`. In game: default `PASS` + `EXIT:0`, counterfactual
+> `EXIT:0`, three selftest legs and the control `EXIT:1`, `check-e2e-logs --strict` 7/7.

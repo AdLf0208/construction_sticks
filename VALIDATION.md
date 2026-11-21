@@ -76,3 +76,38 @@ The 0.1.0 ladder above is retired with the `.hnmod` format (`tools/horizon.py`,
 
 Logs: `ports/_shared/evidence/constructionstick/sdk-*.log`. The 0.1.0 in-game transcripts
 are historical (see that folder's `README.md`).
+
+## 0.2.5 — slice 2: durable sticks (2026-11-21, pin `0a875da`)
+
+The package is repinned to **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** + mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0` (from `0b14f8a`) and gains the sticks' tier
+durability and stack size. Every compile ran in a `ports/tools/build-slot.sh` lease with
+`BUILD_LOCAL=1` and `CARGO_INCREMENTAL=0`, no `--target-dir`, `rm -f Cargo.lock` before each
+build. Evidence: `ports/_shared/evidence/constructionstick/` and `…/constructionstick-e2e/`.
+
+| Check | Result |
+|---|---|
+| red, carried data | `assertion left == right failed: … upstream's sticks are one per stack` (`sdk-test-red-data.log`) |
+| red, budget helpers | `error[E0425]: cannot find function 'remaining_durability' in this scope` (`sdk-test-red-limit.log`) |
+| `cargo test --offline` | **18 passed**, 0 failed (`sdk-test.log`) |
+| `cargo clippy --all-targets --offline -- -D warnings` | exit 0, 0 warnings (`sdk-clippy.log`) |
+| `cargo fmt --check` | `FMT-OK` (`sdk-clippy.log`) |
+| `rm -f Cargo.lock && cargo horizon-mod build` (twice) | `cmp: identical`; **94,435 B**, SHA-256 `73c1fd3e…e4938` (`sdk-build*.log`, `sdk-sha256.log`) |
+| `cargo horizon-mod check constructionstick.hmod` | exit **0** (`sdk-check.log`) |
+| `cargo horizon-mod fits … --build 0a875da` | `0a875da  made for` (`sdk-fits.log`) |
+| `cargo horizon-mod fits … --build 0b14f8a` | `0b14f8a  fits` (`sdk-fits-other.log`) |
+| `verify-sdk-package.py constructionstick` | **1/1** (`sdk-package-gate.log`) |
+| launcher build | `Compiling constructionstick (1 of 1)`, `native-0a875da-0e022bce4150` (`constructionstick-e2e/launcher-build.log`) |
+| in game, default | six phases `PASS` + `EXIT:0` (`e2e-launcher.log`) |
+| in game, counterfactual | `PASS` + `EXIT:0`, 0 placed (`e2e-launcher-counterfactual.log`) |
+| in game, selftest phase-1 flip | `FAIL` + `EXIT:1` (`e2e-launcher-selftest.log`) |
+| in game, selftest durability flip | `FAIL: … damage 3 … expected 4` + `EXIT:1` (`e2e-launcher-selftest-wear.log`) |
+| in game, selftest recipe flip | `FAIL: wooden_stick: expected 1 constructionstick:copper_stick …` + `EXIT:1` (`e2e-launcher-selftest-recipe.log`) |
+| in game, control (no package) | `FAIL: the content mod did not provide constructionstick:wooden_stick` + `EXIT:1` (`e2e-launcher-control.log`) |
+| `check-e2e-logs.py constructionstick-e2e --strict` | `logs=7 ok=7 missing-exit=0 bad-exit=0`, exit 0 |
+
+Artifact: `constructionstick.hmod`, **94,435 B**, SHA-256
+`73c1fd3e91f0bb0b2ecaa9c34650480dfda8c3cbb71d6bd4ccd54294076e4938`, **140 entries**, no
+`Cargo.lock`; `uses.json` 136 entries, `made_for = 0a875da…`. See `notes.md` → `## Slice 2`
+for the red→green record, the 26.3 spear collision and its fix, the coverage table and the
+harness facts.

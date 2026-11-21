@@ -5,7 +5,7 @@
 #
 # Cargo's name and version are not the mod's identity: horizon-mod.toml is.
 name = "constructionstick"
-version = "0.2.0"
+version = "0.2.5"
 edition = "2024"
 license = "MIT"
 description = "Construction Sticks for Horizon: a stick fills the clicked face's plane with copies of the clicked block"

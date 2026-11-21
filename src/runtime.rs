@@ -50,6 +50,35 @@ pub trait World {
     fn can_place(&mut self, pos: [i32; 3]) -> bool;
 }
 
+/// The durability a stick has left: its `max_damage` minus the damage it carries.
+/// A stack with no durability (no `max_damage`, or a max of 0) reports
+/// [`u32::MAX`], so it never caps a use.
+pub fn remaining_durability(max_damage: Option<u32>, damage: u32) -> u32 {
+    match max_damage {
+        Some(max) if max > 0 => max.saturating_sub(damage),
+        _ => u32::MAX,
+    }
+}
+
+/// How a use is paid for. A creative player places without items and without
+/// durability, so the supply does not cap the job; the remaining durability still
+/// does (upstream's `StickJob.java:71` and `StickJob.doIt`, `:88-111`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Payment {
+    Survival,
+    Creative,
+}
+
+/// The most cells one use may place: the tier's action limit, the stick's remaining
+/// durability and — in survival — the player's supply.
+pub fn use_limit(action_limit: u32, payment: Payment, remaining: u32, supply: u32) -> u32 {
+    let cells = action_limit.min(remaining);
+    match payment {
+        Payment::Survival => cells.min(supply),
+        Payment::Creative => cells,
+    }
+}
+
 /// The eight in-plane directions for a face: both ways on each of the two
 /// axes, plus the four diagonals (upstream's `nolock` gate).
 pub fn plane_offsets(normal: [i32; 3]) -> [[i32; 3]; 8] {
@@ -311,6 +340,52 @@ mod tests {
         assert!(!accepts([0, 64, 1], Some([0, 64, 2])));
         // Vanilla refused the placement outright.
         assert!(!accepts([0, 64, 1], None));
+    }
+
+    #[test]
+    fn a_use_is_capped_by_remaining_durability_and_supply() {
+        // Survival, a full wooden stick and plenty of blocks: the tier's limit.
+        assert_eq!(use_limit(3, Payment::Survival, 59, 64), 3);
+        // A stick with two uses left caps the job at two, even with 64 blocks.
+        assert_eq!(use_limit(3, Payment::Survival, 2, 64), 2);
+        // The supply caps it as well.
+        assert_eq!(use_limit(3, Payment::Survival, 59, 1), 1);
+        // No supply, no job.
+        assert_eq!(use_limit(3, Payment::Survival, 59, 0), 0);
+        // Creative pays nothing, so the supply does not cap it...
+        assert_eq!(use_limit(3, Payment::Creative, 59, 0), 3);
+        // ...but creative still caps every job by the remaining durability
+        // (StickJob.java:71, even though creative never damages the stick).
+        assert_eq!(use_limit(3, Payment::Creative, 1, 0), 1);
+        // An item with no durability reports u32::MAX and is not capped by it.
+        assert_eq!(use_limit(1024, Payment::Survival, u32::MAX, 2000), 1024);
+    }
+
+    #[test]
+    fn a_tier_stick_reports_its_remaining_durability() {
+        assert_eq!(
+            remaining_durability(None, 0),
+            u32::MAX,
+            "no max_damage: unlimited"
+        );
+        assert_eq!(
+            remaining_durability(Some(0), 10),
+            u32::MAX,
+            "a max of 0 is no durability"
+        );
+        assert_eq!(remaining_durability(Some(59), 0), 59);
+        assert_eq!(remaining_durability(Some(59), 3), 56);
+        assert_eq!(remaining_durability(Some(59), 58), 1);
+        assert_eq!(
+            remaining_durability(Some(59), 59),
+            0,
+            "a spent stick has no use left"
+        );
+        assert_eq!(
+            remaining_durability(Some(59), 99),
+            0,
+            "damage past the maximum saturates at none"
+        );
     }
 
     #[test]

@@ -9,8 +9,8 @@
 //! `notes.md` under `## Migration to the SDK format`.
 
 use mod_api::{
-    BlockState, BlockUpdateFlags, Hand, HostBlockStates, HostSide, InteractionResult, ItemKey,
-    ItemPart, ItemStack, LevelRef, PlayerRef, Registrar, ServerHost, UseOnEvent,
+    BlockFace, BlockState, BlockUpdateFlags, Hand, HostBlockStates, HostSide, InteractionResult,
+    ItemKey, ItemPart, ItemStack, LevelRef, PlayerRef, Registrar, ServerHost, UseOnEvent,
 };
 
 use crate::runtime;
@@ -167,8 +167,50 @@ fn wear(
 struct Placement<'a> {
     state: BlockState,
     item: ItemKey,
+    face: BlockFace,
     hand: Hand,
     stack: &'a ItemStack,
+}
+
+/// The `BlockFace` a click normal names.
+fn block_face(normal: [i32; 3]) -> Option<BlockFace> {
+    Some(match normal {
+        [0, -1, 0] => BlockFace::Down,
+        [0, 1, 0] => BlockFace::Up,
+        [0, 0, -1] => BlockFace::North,
+        [0, 0, 1] => BlockFace::South,
+        [-1, 0, 0] => BlockFace::West,
+        [1, 0, 0] => BlockFace::East,
+        _ => return None,
+    })
+}
+
+/// Whether `cell` lies inside the level's world border (the `[min_x, min_z, max_x,
+/// max_z]` the host reports; no border means everything is inside). The direct
+/// placement path checks loaded and absolute world bounds, not the border this
+/// server configures.
+fn in_border(border: Option<[f64; 4]>, cell: [i32; 3]) -> bool {
+    border.is_none_or(|[min_x, min_z, max_x, max_z]| {
+        let x = f64::from(cell[0]) + 0.5;
+        let z = f64::from(cell[2]) + 0.5;
+        x >= min_x && x <= max_x && z >= min_z && z <= max_z
+    })
+}
+
+/// Whether the player may write at `cell`: the level's world border, and the game's
+/// own `mayUseItemAt` for the held stick (build permission, and adventure's
+/// `can_place_on`). Spawn protection is not exposed by this pin (`surface.json` has
+/// no spawn-protection symbol), so it is recorded as an API gap in `notes.md`.
+fn may_write(
+    host: &dyn ServerHost,
+    player: PlayerRef,
+    level: LevelRef,
+    cell: [i32; 3],
+    face: BlockFace,
+    stack: &ItemStack,
+) -> bool {
+    in_border(level.world_border(host), cell)
+        && player.may_use_item_at(host, cell, face, stack) != Some(false)
 }
 
 /// Place the planned cells, paying one item of the block's kind and one durability
@@ -185,6 +227,7 @@ fn place(
     let Placement {
         state,
         item,
+        face,
         hand,
         stack,
     } = *placement;
@@ -199,10 +242,15 @@ fn place(
         if budget == 0 {
             break;
         }
+        // The direct placement path tests loaded chunks and the absolute world
+        // bounds; it does not test the configured border or the game's own use
+        // permission, so the fill checks both before writing a cell. A refused cell
+        // is skipped, as a refusal from the old placement call was.
+        if !may_write(&*host, player, level, *cell, face, stack) {
+            continue;
+        }
         // The closest supported shape of vanilla's placement path: the state is
         // written in the planned cell and `setPlacedBy` runs in the player's turn.
-        // A refused cell (unloaded, out of height, another level) is skipped, as a
-        // refusal from the old placement call was.
         if player
             .place_block(host, level, *cell, state, false)
             .is_err()
@@ -218,11 +266,13 @@ fn place(
                 break;
             }
             budget -= 1;
-        }
-        match wear(host, player, hand, stack, damage) {
-            Some(next) => damage = next,
-            // The stick broke on the block just placed: this use is over.
-            None => break,
+            // Creative pays no durability (upstream skips the wear entirely), so a
+            // creative stick never wears out however many blocks it places.
+            match wear(host, player, hand, stack, damage) {
+                Some(next) => damage = next,
+                // The stick broke on the block just placed: this use is over.
+                None => break,
+            }
         }
     }
 }
@@ -247,11 +297,21 @@ fn use_on_block(
         return None;
     }
     let creative = player.is_creative(host).unwrap_or(false);
-    let limit = if creative {
-        tier.limit
+    // The stick's own remaining durability caps every job, and in survival the supply
+    // caps it too (creative pays nothing). Both are upstream's `StickJob` rules.
+    let remaining =
+        runtime::remaining_durability(host.max_damage(event.stack.item()), event.stack.damage());
+    let supply = if creative {
+        u32::MAX
     } else {
-        tier.limit.min(count_items(host, player, item))
+        count_items(host, player, item)
     };
+    let payment = if creative {
+        runtime::Payment::Creative
+    } else {
+        runtime::Payment::Survival
+    };
+    let limit = runtime::use_limit(tier.limit, payment, remaining, supply);
     if limit == 0 {
         return None;
     }
@@ -262,6 +322,7 @@ fn use_on_block(
     if cells.is_empty() {
         return None;
     }
+    let face = block_face(event.face)?;
     place(
         host,
         player,
@@ -270,6 +331,7 @@ fn use_on_block(
         &Placement {
             state,
             item,
+            face,
             hand: event.hand,
             stack: event.stack,
         },
@@ -334,6 +396,27 @@ mod tests {
     }
 
     #[test]
+    fn a_click_normal_names_the_face_the_game_checks() {
+        assert_eq!(block_face([0, 1, 0]), Some(BlockFace::Up));
+        assert_eq!(block_face([0, 0, 1]), Some(BlockFace::South));
+        assert_eq!(block_face([3, 0, 0]), None);
+    }
+
+    #[test]
+    fn a_cell_outside_the_world_border_is_not_written() {
+        // [min_x, min_z, max_x, max_z] as level_world_border reports it.
+        let border = Some([-8.0, -8.0, 8.0, 8.0]);
+        assert!(in_border(border, [0, 64, 0]));
+        assert!(in_border(border, [7, 64, -7]));
+        assert!(!in_border(border, [9, 64, 0]), "east of the border");
+        assert!(!in_border(border, [0, 64, -9]), "north of the border");
+        assert!(
+            in_border(None, [1_000_000, 64, 1_000_000]),
+            "no border, no refusal"
+        );
+    }
+
+    #[test]
     fn every_stick_the_content_declares_is_registered() {
         // The five ids the content ships are the five the Part answers for: a stick
         // left out here is an item the player can craft and that does nothing.
@@ -341,5 +424,61 @@ mod tests {
             assert!(runtime::stick_for(id).is_some(), "{id} has no tier");
         }
         assert_eq!(STICK_IDS.len(), 5);
+    }
+
+    /// The five item declarations as packaged. The file the game loads is the file
+    /// read here, so the tier table in [`runtime`] and the carried durability cannot
+    /// drift apart.
+    const ITEM_FILES: [(&str, &str); 5] = [
+        (
+            runtime::WOODEN_STICK,
+            include_str!("../data/constructionstick/horizon/item/wooden_stick.json"),
+        ),
+        (
+            runtime::COPPER_STICK,
+            include_str!("../data/constructionstick/horizon/item/copper_stick.json"),
+        ),
+        (
+            runtime::IRON_STICK,
+            include_str!("../data/constructionstick/horizon/item/iron_stick.json"),
+        ),
+        (
+            runtime::DIAMOND_STICK,
+            include_str!("../data/constructionstick/horizon/item/diamond_stick.json"),
+        ),
+        (
+            runtime::NETHERITE_STICK,
+            include_str!("../data/constructionstick/horizon/item/netherite_stick.json"),
+        ),
+    ];
+
+    /// The number a `"field": <n>` pair holds in one declaration. The declarations
+    /// have the fixed shape `content_declarations::Item` reads, and the crate has no
+    /// JSON dependency, so this scans for the field and the integer after it.
+    fn number_field(json: &str, field: &str) -> Option<u32> {
+        let after = &json[json.find(field)? + field.len()..];
+        let start = after.find(|c: char| c.is_ascii_digit())?;
+        let digits: String = after[start..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        digits.parse().ok()
+    }
+
+    #[test]
+    fn every_stick_declares_its_tier_durability_and_does_not_stack() {
+        for (id, json) in ITEM_FILES {
+            let tier = runtime::stick_for(id).expect("every packaged stick has a tier");
+            assert_eq!(
+                number_field(json, "max_stack_size"),
+                Some(1),
+                "{id}: upstream's sticks are one per stack"
+            );
+            assert_eq!(
+                number_field(json, "max_damage"),
+                Some(tier.durability),
+                "{id}: the carried durability is its tier's"
+            );
+        }
     }
 }

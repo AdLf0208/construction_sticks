@@ -1,4 +1,4 @@
-# Construction Sticks for Horizon — slice 1 (plane construction), one flat SDK package.
+# Construction Sticks for Horizon — plane construction with durable sticks, one flat SDK package.
 #
 # Migrated 2026-11-18 from the retired `.hnmod` container (Horizon's mod-API merge
 # #16941; the registry closed submission #868 with the format purge). The manifest
@@ -13,11 +13,11 @@
 # (ARCHITECTURE.md §8).
 id = "constructionstick"
 name = "Construction Sticks"
-version = "0.2.0"
+version = "0.2.5"
 description = """A port of Construction Sticks for Horizon: a construction stick right-clicked on a
 block fills the face's plane with copies of the clicked block, bounded by the stick's tier
-(3/9/27/128/1024 blocks) and the player's supply, paying one item of the block's kind and one
-durability per placed block. The angel, destruction and replacement modes, the upgrade
+(3/9/27/128/1024 blocks), its remaining durability and the player's supply, paying one item of the
+block's kind and one durability per placed block. The angel, destruction and replacement modes, the upgrade
 templates, the battery and the options screen/undo are not ported yet."""
 authors = ["Mrbysco", "AdLf0208"]
 # The content API: exact and checked. This package ships carried content beside its code,
@@ -30,5 +30,5 @@ capabilities = ["registries"]
 
 [native]
 game = "26.3"
-horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+horizon = "0a875da91dbb0fdcb7ba8c42c11341aa229af51a"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
